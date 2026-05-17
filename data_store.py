@@ -1,11 +1,14 @@
 """
 data_store.py — UFC Fighter Mock Database
-In-memory veri deposu + aggregation fonksiyonları
-Hiçbir dış kütüphane kullanılmamıştır.
+==========================================
+In-memory data store containing UFC fighter records,
+weight class definitions, and aggregation utilities.
+No external libraries are used.
 """
 
 # ─────────────────────────────────────────────
 # WEIGHT CLASSES
+# Each division has a name and an upper weight limit in pounds.
 # ─────────────────────────────────────────────
 WEIGHT_CLASSES = [
     {"id": 1, "name": "Strawweight",       "limit_lbs": 115},
@@ -21,6 +24,12 @@ WEIGHT_CLASSES = [
 
 # ─────────────────────────────────────────────
 # FIGHTERS
+# Each fighter record contains:
+#   - Personal info  : name, nickname, nationality, age
+#   - Physical stats : height_cm, reach_cm, stance
+#   - Fight record   : wins, losses, draws
+#   - Win methods    : wins_by_ko, wins_by_sub, wins_by_dec
+#   - UFC status     : title_holder, rank
 # ─────────────────────────────────────────────
 FIGHTERS = [
     {
@@ -254,61 +263,108 @@ FIGHTERS = [
 ]
 
 # ─────────────────────────────────────────────
-# AGGREGATION FONKSİYONLARI
+# AGGREGATION FUNCTIONS
+# Pure Python utilities for querying and summarizing
+# the in-memory fighter data — no ORM, no SQL.
 # ─────────────────────────────────────────────
 
 def get_all_fighters():
-    """Tüm dövüşçüleri döner."""
+    """Return the full list of fighters."""
     return FIGHTERS
 
+
 def get_fighter_by_id(fighter_id: int):
-    """ID'ye göre tek dövüşçü döner, bulamazsa None."""
+    """
+    Look up a single fighter by their unique ID.
+    Returns None if no match is found.
+    """
     for f in FIGHTERS:
         if f["id"] == fighter_id:
             return f
     return None
 
+
 def filter_fighters(weight_class=None, nationality=None, title_holder=None):
-    """Verilen kriterlere göre dövüşçüleri filtreler."""
+    """
+    Filter the fighter roster by one or more optional criteria.
+
+    Args:
+        weight_class  : e.g. "Lightweight"  (case-insensitive)
+        nationality   : e.g. "Brazilian"    (case-insensitive)
+        title_holder  : True / False
+
+    Returns a list of matching fighter dicts.
+    """
     result = FIGHTERS
+
     if weight_class:
-        result = [f for f in result if f["weight_class"].lower() == weight_class.lower()]
+        result = [f for f in result
+                  if f["weight_class"].lower() == weight_class.lower()]
+
     if nationality:
-        result = [f for f in result if f["nationality"].lower() == nationality.lower()]
+        result = [f for f in result
+                  if f["nationality"].lower() == nationality.lower()]
+
     if title_holder is not None:
         result = [f for f in result if f["title_holder"] == title_holder]
+
     return result
 
-def get_summary_stats():
-    """Genel istatistik özetini döner."""
-    total = len(FIGHTERS)
-    total_fights = sum(f["wins"] + f["losses"] + f["draws"] for f in FIGHTERS)
-    avg_age = round(sum(f["age"] for f in FIGHTERS) / total, 1)
-    avg_reach = round(sum(f["reach_cm"] for f in FIGHTERS) / total, 1)
 
-    ko_rates = []
-    for f in FIGHTERS:
-        if f["wins"] > 0:
-            ko_rates.append(round(f["wins_by_ko"] / f["wins"] * 100, 1))
+def get_summary_stats():
+    """
+    Compute and return high-level statistics across all fighters.
+
+    Metrics included:
+        total_fighters             — number of fighters in the database
+        total_fights_recorded      — sum of all wins + losses + draws
+        title_holders              — number of current champions
+        average_age                — mean age of all fighters
+        average_reach_cm           — mean reach in centimetres
+        avg_ko_rate_pct            — average KO win percentage
+        nationalities              — number of distinct nationalities
+        weight_classes_represented — number of distinct weight classes
+    """
+    total        = len(FIGHTERS)
+    total_fights = sum(f["wins"] + f["losses"] + f["draws"] for f in FIGHTERS)
+    avg_age      = round(sum(f["age"]      for f in FIGHTERS) / total, 1)
+    avg_reach    = round(sum(f["reach_cm"] for f in FIGHTERS) / total, 1)
+
+    # KO rate per fighter — only consider fighters with at least one win
+    ko_rates = [
+        round(f["wins_by_ko"] / f["wins"] * 100, 1)
+        for f in FIGHTERS if f["wins"] > 0
+    ]
 
     return {
-        "total_fighters": total,
-        "total_fights_recorded": total_fights,
-        "title_holders": sum(1 for f in FIGHTERS if f["title_holder"]),
-        "average_age": avg_age,
-        "average_reach_cm": avg_reach,
-        "avg_ko_rate_pct": round(sum(ko_rates) / len(ko_rates), 1),
-        "nationalities": len(set(f["nationality"] for f in FIGHTERS)),
+        "total_fighters":             total,
+        "total_fights_recorded":      total_fights,
+        "title_holders":              sum(1 for f in FIGHTERS if f["title_holder"]),
+        "average_age":                avg_age,
+        "average_reach_cm":           avg_reach,
+        "avg_ko_rate_pct":            round(sum(ko_rates) / len(ko_rates), 1),
+        "nationalities":              len(set(f["nationality"]   for f in FIGHTERS)),
         "weight_classes_represented": len(set(f["weight_class"] for f in FIGHTERS)),
     }
 
-def get_top_fighters(metric="wins", limit=5):
+
+def get_top_fighters(metric: str = "wins", limit: int = 5):
     """
-    Verilen metriğe göre sıralı top N dövüşçüyü döner.
-    metric: 'wins' | 'ko_rate' | 'sub_rate' | 'win_rate'
+    Return the top N fighters ranked by the given metric.
+
+    Supported metrics:
+        'wins'     — total number of wins (raw count)
+        'ko_rate'  — KO wins / total wins       (returned as 0–100 %)
+        'sub_rate' — submission wins / total wins (returned as 0–100 %)
+        'win_rate' — wins / total fights          (returned as 0–100 %)
+
+    Falls back to 'wins' if an unknown metric is supplied.
+    Returns a list of dicts: id, name, weight_class, <metric>.
     """
+
+    # Key functions — each accepts a fighter dict and returns a numeric score
     def ko_rate(f):
-        return f["wins_by_ko"] / f["wins"] if f["wins"] > 0 else 0
+        return f["wins_by_ko"]  / f["wins"] if f["wins"] > 0 else 0
 
     def sub_rate(f):
         return f["wins_by_sub"] / f["wins"] if f["wins"] > 0 else 0
@@ -324,19 +380,25 @@ def get_top_fighters(metric="wins", limit=5):
         "win_rate": win_rate,
     }
 
-    key_fn = key_map.get(metric, key_map["wins"])
+    key_fn          = key_map.get(metric, key_map["wins"])
     sorted_fighters = sorted(FIGHTERS, key=key_fn, reverse=True)
+
+    # Rate metrics are stored as 0–1 floats; multiply by 100 for readability
+    is_rate = metric in ("ko_rate", "sub_rate", "win_rate")
 
     result = []
     for f in sorted_fighters[:limit]:
+        value = key_fn(f)
         result.append({
-            "id":         f["id"],
-            "name":       f["name"],
+            "id":           f["id"],
+            "name":         f["name"],
             "weight_class": f["weight_class"],
-            metric:       round(key_fn(f) * (100 if metric in ("ko_rate", "sub_rate", "win_rate") else 1), 1),
+            metric:         round(value * 100 if is_rate else value, 1),
         })
+
     return result
 
+
 def get_all_weight_classes():
-    """Tüm sıklet kategorilerini döner."""
+    """Return the list of all UFC weight class definitions."""
     return WEIGHT_CLASSES
